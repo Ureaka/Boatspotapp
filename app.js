@@ -192,7 +192,7 @@ async function callGemini(imageDataUrl) {
     const resized = await resizeImage(imageDataUrl, 900, 0.75);
     const b64     = resized.split(',')[1];
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`;
 
     const resp = await fetch(url, {
         method: 'POST',
