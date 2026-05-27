@@ -24,7 +24,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Generate firebase-config.js from secrets
+      - name: Build site into dist/
         env:
           FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
           FIREBASE_AUTH_DOMAIN: ${{ secrets.FIREBASE_AUTH_DOMAIN }}
@@ -33,7 +33,9 @@ jobs:
           FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          cat > firebase-config.js << ENDOFFILE
+          mkdir dist
+          cp index.html styles.css app.js manifest.json dist/
+          cat > dist/firebase-config.js << ENDOFFILE
           const FIREBASE = {
             apiKey:            "${FIREBASE_API_KEY}",
             authDomain:        "${FIREBASE_AUTH_DOMAIN}",
@@ -51,7 +53,7 @@ jobs:
       - name: Upload site
         uses: actions/upload-pages-artifact@v3
         with:
-          path: '.'
+          path: dist
 
       - name: Deploy
         id: deployment
