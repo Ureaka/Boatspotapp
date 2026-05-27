@@ -1,2 +1,5 @@
+# Private — never commit real config
+firebase-config.js
+
 # local dev only
 *.local
