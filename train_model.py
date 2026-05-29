@@ -74,11 +74,18 @@ MODEL_OUT        = Path('model')
 
 def check_deps():
     missing = []
-    for pkg in ['tensorflow', 'sklearn', 'duckduckgo_search']:
+    for pkg in ['tensorflow', 'sklearn']:
         try:
             __import__(pkg if pkg != 'sklearn' else 'sklearn')
         except ImportError:
             missing.append(pkg)
+    try:
+        __import__('ddgs')
+    except ImportError:
+        try:
+            __import__('duckduckgo_search')
+        except ImportError:
+            missing.append('ddgs')
     if missing:
         print("Missing packages. Run:\n")
         print(f"  py -m pip install -r requirements.txt\n")
@@ -89,7 +96,10 @@ def check_deps():
 def download_images():
     import urllib.request
     import time
-    from duckduckgo_search import DDGS
+    try:
+        from ddgs import DDGS
+    except ImportError:
+        from duckduckgo_search import DDGS
 
     HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 
@@ -125,13 +135,17 @@ def download_images():
         for ship_name in names:
             if total_saved >= IMAGES_PER_CLASS:
                 break
-            query = f'"{ship_name}" ship photograph'
-            try:
-                time.sleep(0.8)
-                results = list(DDGS().images(keywords=query, max_results=20, type_image='photo'))
-            except Exception as e:
-                print(f"    {ship_name[:35]:35s} — search failed: {e}")
-                continue
+            query = f'{ship_name} ship'
+            results = []
+            for attempt in range(3):
+                try:
+                    time.sleep(3 + attempt * 4)   # 3s, 7s, 11s between attempts
+                    results = list(DDGS().images(keywords=query, max_results=15))
+                    break
+                except Exception as e:
+                    if attempt == 2:
+                        print(f"    {ship_name[:35]:35s} — failed after 3 attempts")
+                    continue
 
             saved = 0
             for r in results:
