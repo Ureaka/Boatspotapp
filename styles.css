@@ -567,6 +567,61 @@ html, body {
     font-size:13px; font-weight:600; text-align:center; margin-bottom:14px;
 }
 .result-actions { display:flex; flex-direction:column; gap:8px; margin-top:16px; }
+.result-secondary-actions { display:flex; gap:8px; }
+.btn-sm { font-size:13px; padding:9px 12px; flex:1; }
+
+/* ==========================================
+   TYPE PICKER OVERLAY
+   ========================================== */
+.typepicker-sheet {
+    width:100%; max-width:440px; margin:auto;
+    background:var(--bg2); border-radius:24px 24px 0 0;
+    padding:24px 20px 48px; margin-top:auto;
+    position:relative; bottom:0;
+}
+#screen-typepicker {
+    align-items:flex-end;
+    background:rgba(9,21,37,0.85);
+    backdrop-filter:blur(4px);
+}
+.typepicker-hint {
+    color:var(--text2); text-align:center;
+    margin:4px 0 20px; font-size:14px; line-height:1.5;
+}
+.type-picker-grid {
+    display:grid; grid-template-columns:repeat(4,1fr); gap:10px;
+}
+.type-pick-btn {
+    background:var(--surface); border:2px solid var(--border);
+    border-radius:14px; padding:14px 6px;
+    color:var(--text); font-size:12px; font-weight:700;
+    text-align:center; cursor:pointer; transition:all 0.18s;
+    line-height:1.5;
+}
+.type-pick-btn:active { transform:scale(0.95); }
+.type-pick-btn.detected {
+    border-color:var(--cyan);
+    background:rgba(6,182,212,0.12);
+    color:var(--cyan);
+}
+
+/* ==========================================
+   EDIT DETAILS FORM
+   ========================================== */
+.edit-details-form {
+    background:var(--bg3); border:1px solid var(--border);
+    border-radius:16px; padding:20px; margin:12px 0;
+}
+.edit-details-form h4 {
+    font-size:14px; font-weight:800; color:var(--text);
+    margin-bottom:16px;
+}
+.edit-details-form select {
+    width:100%; padding:12px 14px;
+    background:var(--bg); border:1.5px solid var(--border);
+    border-radius:10px; color:var(--text); font-size:15px;
+    -webkit-appearance:none; appearance:none;
+}
 .detail-container { width:100%; position:relative; }
 .detail-close { position:fixed; top:16px; right:16px; z-index:300; }
 

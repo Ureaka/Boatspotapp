@@ -210,6 +210,27 @@
         </div>
     </div>
 
+    <!-- Type Picker -->
+    <div id="screen-typepicker" class="overlay hidden">
+        <div class="typepicker-sheet">
+            <div class="overlay-top-bar">
+                <h2 class="overlay-title">&#128674; What type of ship?</h2>
+                <button class="close-btn" id="closeTypepickerBtn">&#10005;</button>
+            </div>
+            <p id="typepickerHint" class="typepicker-hint">Tap the correct ship type to continue:</p>
+            <div class="type-picker-grid">
+                <button class="type-pick-btn" data-type="cruise">&#128739;<br>Cruise Ship</button>
+                <button class="type-pick-btn" data-type="container">&#128230;<br>Container</button>
+                <button class="type-pick-btn" data-type="bulk">&#9875;<br>Bulk Carrier</button>
+                <button class="type-pick-btn" data-type="tanker">&#128754;<br>Oil Tanker</button>
+                <button class="type-pick-btn" data-type="coastguard">&#128680;<br>Coast Guard</button>
+                <button class="type-pick-btn" data-type="military">&#9876;<br>Military</button>
+                <button class="type-pick-btn" data-type="car-carrier">&#128663;<br>Car Carrier</button>
+                <button class="type-pick-btn" data-type="megayacht">&#9971;<br>Mega Yacht</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Result -->
     <div id="screen-result" class="overlay hidden">
         <div class="overlay-scroll">
@@ -222,8 +243,41 @@
                     Already in your fleet &mdash; duplicates don&rsquo;t count toward your collection!
                 </div>
                 <div id="resultCardWrapper"></div>
+
+                <!-- Edit details form -->
+                <div id="editDetailsForm" class="edit-details-form hidden">
+                    <h4>&#9998; Edit Ship Details</h4>
+                    <div class="form-group">
+                        <label>Ship Name</label>
+                        <input type="text" id="editName" placeholder="Enter ship name">
+                    </div>
+                    <div class="form-group">
+                        <label>Shipping Line / Owner</label>
+                        <input type="text" id="editLine" placeholder="Enter company or owner">
+                    </div>
+                    <div class="form-group">
+                        <label>Ship Type</label>
+                        <select id="editType">
+                            <option value="cruise">Cruise Ship</option>
+                            <option value="container">Container Ship</option>
+                            <option value="bulk">Bulk Carrier</option>
+                            <option value="tanker">Oil Tanker</option>
+                            <option value="coastguard">Coast Guard</option>
+                            <option value="military">Military Ship</option>
+                            <option value="car-carrier">Car Carrier</option>
+                            <option value="megayacht">Mega Yacht</option>
+                        </select>
+                    </div>
+                    <button id="applyEditBtn" class="btn-primary">Apply Changes</button>
+                </div>
+
                 <div class="result-actions">
                     <button id="addToCollectionBtn" class="btn-primary btn-large">&#10003; Add to Fleet</button>
+                    <div class="result-secondary-actions">
+                        <button id="rerollBtn" class="btn-ghost btn-sm">&#127922; Different Ship</button>
+                        <button id="wrongTypeBtn" class="btn-ghost btn-sm">&#8635; Wrong Type</button>
+                        <button id="editDetailsBtn" class="btn-ghost btn-sm">&#9998; Edit Details</button>
+                    </div>
                     <button id="discardBtn" class="btn-ghost">Discard</button>
                 </div>
             </div>
@@ -279,8 +333,15 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 
+<!-- TensorFlow.js + MobileNet for on-device ship type detection -->
+<script src="https://unpkg.com/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+<script src="https://unpkg.com/@tensorflow-models/mobilenet@2.1.0/dist/mobilenet.min.js"></script>
+
 <!-- Your config (fill in firebase-config.js) -->
 <script src="firebase-config.js"></script>
+
+<!-- Ship database -->
+<script src="ships.js"></script>
 
 <!-- App -->
 <script src="app.js"></script>

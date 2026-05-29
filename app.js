@@ -1,5 +1,5 @@
 // ShipSpotter — app.js
-// Firebase Auth + Firestore + Gemini 1.5 Flash (free)
+// Firebase Auth + Firestore + TF.js MobileNet + built-in ship database
 'use strict';
 
 /* =============================================
@@ -32,22 +32,24 @@ const BASE_POINTS   = { common:100, uncommon:250, rare:500, epic:1000, legendary
    STATE
    ============================================= */
 const S = {
-    user:              null,   // Firebase user object
-    collection:        [],     // local cache of Firestore docs
+    user:              null,
+    collection:        [],
     pendingCard:       null,
     pendingIsDuplicate:false,
     capturedDataUrl:   null,
     currentFilter:     'all',
-    geminiKey:         null,
+    tfModel:           null,
     db:                null,
     auth:              null,
 };
+
+// Promise for background model loading
+let modelLoadPromise = null;
 
 /* =============================================
    FIREBASE INIT
    ============================================= */
 function initFirebase() {
-    // FIREBASE and GEMINI_API_KEY come from firebase-config.js
     if (typeof FIREBASE === 'undefined') {
         fatalError('firebase-config.js not loaded. Open firebase-config.js and fill in your values.');
         return;
@@ -55,10 +57,6 @@ function initFirebase() {
     firebase.initializeApp(FIREBASE);
     S.db   = firebase.firestore();
     S.auth = firebase.auth();
-
-    S.geminiKey = typeof GROQ_API_KEY !== 'undefined' ? GROQ_API_KEY : '';
-
-    // Listen for auth state changes
     S.auth.onAuthStateChanged(onAuthChange);
 }
 
@@ -116,8 +114,6 @@ async function loadCollection() {
 }
 
 async function saveCardToFirestore(card) {
-    // Store the photo as base64 inside the Firestore document.
-    // Images are compressed to ~480px / 65% quality before this point (~25-50 KB).
     await shipsRef().doc(card.id).set(card);
 }
 
@@ -149,82 +145,44 @@ async function signOut() {
 }
 
 /* =============================================
-   GEMINI API — SHIP IDENTIFICATION (FREE)
+   TF.JS — SHIP TYPE DETECTION
    ============================================= */
-const IDENTIFY_PROMPT = `You are a maritime expert and ship identification specialist.
-
-Examine the image carefully and identify the ship shown. Return ONLY a JSON object — no markdown fences, no explanation. Use this exact structure:
-
-{
-  "name": "Specific ship name, or 'Unknown [Type]' if unidentifiable",
-  "line": "Shipping company / owner, or 'Independent'",
-  "type": "one of exactly: cruise | container | bulk | tanker | coastguard | military | car-carrier | megayacht",
-  "length": 300,
-  "width": 45,
-  "height": 55,
-  "tonnage": 150000,
-  "yearBuilt": 2012,
-  "maxPassengers": 3000,
-  "description": "2-3 sentence description of this vessel or ship class.",
-  "funFact": "One interesting fact about this ship or its class.",
-  "isRare": false,
-  "estimatedValue": 650,
-  "confidence": "high"
+function startModelLoad() {
+    if (typeof mobilenet === 'undefined') {
+        console.warn('MobileNet not available — type picker will show without pre-selection');
+        return;
+    }
+    modelLoadPromise = mobilenet.load({ version: 2, alpha: 1.0 })
+        .then(m => { S.tfModel = m; console.log('MobileNet ready'); return m; })
+        .catch(e => { console.warn('MobileNet load failed:', e); return null; });
 }
 
-Field rules:
-- length / width / height: metres, numbers only
-- tonnage: gross tonnage, number only
-- maxPassengers: total passengers (0 for pure cargo; include crew for military/coastguard)
-- estimatedValue: millions USD, number only
-- isRare: true if vessel is historically significant, famous, unique, or unusual
-- confidence: "high" = specific ship identified, "medium" = class/type identified, "low" = rough type only
-- If the image has NO ship at all, return exactly the string: null
-
-Use real-world data when you can identify the vessel. Otherwise provide accurate typical values for the class visible.`;
-
-async function callGemini(imageDataUrl) {
-    const key = S.geminiKey;
-    if (!key || key === 'YOUR_GROQ_API_KEY') {
-        throw new Error('No API key configured.');
+async function classifyShipType(imgEl) {
+    if (!S.tfModel) return null;
+    try {
+        const preds = await S.tfModel.classify(imgEl, 10);
+        if (typeof LABEL_TO_TYPE === 'undefined') return null;
+        for (const p of preds) {
+            const lbl = p.className.toLowerCase();
+            for (const [key, type] of Object.entries(LABEL_TO_TYPE)) {
+                if (lbl.includes(key.toLowerCase())) return type;
+            }
+        }
+        return null;
+    } catch (e) {
+        console.warn('Classification error:', e);
+        return null;
     }
+}
 
-    const resized = await resizeImage(imageDataUrl, 900, 0.75);
-    const b64     = resized.split(',')[1];
-
-    const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-            'Content-Type':  'application/json',
-            'Authorization': `Bearer ${key}`,
-        },
-        body: JSON.stringify({
-            model: 'llama-3.2-11b-vision-preview',
-            max_tokens: 1024,
-            temperature: 0.2,
-            messages: [{
-                role: 'user',
-                content: [
-                    { type: 'text',      text: IDENTIFY_PROMPT },
-                    { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${b64}` } },
-                ],
-            }],
-        }),
-    });
-
-    if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        const msg = err?.error?.message || ('API error ' + resp.status);
-        throw new Error(msg);
-    }
-
-    const data    = await resp.json();
-    const rawText = data?.choices?.[0]?.message?.content?.trim() ?? '';
-
-    if (rawText === 'null') return null;
-    const match = rawText.match(/\{[\s\S]*\}/);
-    if (!match) return null;
-    return JSON.parse(match[0]);
+/* =============================================
+   SHIP DATABASE HELPERS
+   ============================================= */
+function pickShipFromDB(type) {
+    if (typeof SHIP_DB === 'undefined') return null;
+    const ships = SHIP_DB[type];
+    if (!ships || ships.length === 0) return null;
+    return { ...ships[Math.floor(Math.random() * ships.length)] };
 }
 
 /* =============================================
@@ -435,77 +393,117 @@ function openDetail(id) {
 }
 
 /* =============================================
-   IDENTIFY FLOW
+   IDENTIFY FLOW — TF.js + Ship DB
    ============================================= */
 async function startIdentify() {
     if (!S.capturedDataUrl) return;
+
     showOverlay('loading');
-    document.getElementById('loadingTitle').textContent   = 'Identifying Ship\u2026';
-    document.getElementById('loadingSubtext').textContent = 'Analyzing image with Gemini AI (free)';
+    document.getElementById('loadingTitle').textContent   = 'Scanning Image\u2026';
+    document.getElementById('loadingSubtext').textContent = 'Detecting ship type';
 
-    try {
-        const shipData = await callGemini(S.capturedDataUrl);
-
-        if (!shipData) {
-            hideOverlay('loading');
-            showToast('No ship detected \u2014 try a clearer photo', 'error');
-            return;
-        }
-
-        const rarity = determineRarity(shipData);
-        const pts    = calcPoints(shipData, rarity);
-
-        // Compress photo for storage: max 480px, 65% quality (~20-40 KB)
-        const compressedPhoto = await resizeImage(S.capturedDataUrl, 480, 0.65);
-
-        const card = {
-            id:              'ss-' + Date.now() + '-' + Math.random().toString(36).slice(2,8),
-            name:            shipData.name            || 'Unknown Ship',
-            line:            shipData.line            || 'Independent',
-            type:            shipData.type            || 'cruise',
-            length:          shipData.length          || null,
-            width:           shipData.width           || null,
-            height:          shipData.height          || null,
-            tonnage:         shipData.tonnage         || null,
-            yearBuilt:       shipData.yearBuilt       || null,
-            maxPassengers:   shipData.maxPassengers   ?? null,
-            description:     shipData.description     || '',
-            funFact:         shipData.funFact         || '',
-            isRare:          !!shipData.isRare,
-            estimatedValue:  shipData.estimatedValue  || null,
-            confidence:      shipData.confidence      || 'low',
-            rarity,
-            points:          pts.total,
-            pointsBreakdown: pts,
-            photoDataUrl:    compressedPhoto,
-            capturedAt:      new Date().toISOString(),
-        };
-
-        const isDup = S.collection.some(
-            c => c.name.toLowerCase() === card.name.toLowerCase());
-
-        S.pendingCard        = card;
-        S.pendingIsDuplicate = isDup;
-
-        hideOverlay('loading');
-        showResultScreen(card, isDup);
-
-    } catch (err) {
-        hideOverlay('loading');
-        console.error(err);
-        const raw = err.message || '';
-        const msg = 'Error: ' + raw.slice(0, 120);
-        showToast(msg, 'error');
+    // Wait for model if still loading (8-second timeout)
+    if (!S.tfModel && modelLoadPromise) {
+        try {
+            await Promise.race([
+                modelLoadPromise,
+                new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
+            ]);
+        } catch (_) { /* proceed without model */ }
     }
+
+    let detectedType = null;
+    if (S.tfModel) {
+        const img = document.getElementById('capturedImage');
+        detectedType = await classifyShipType(img);
+    }
+
+    hideOverlay('loading');
+    showTypePicker(detectedType);
+}
+
+function showTypePicker(detectedType) {
+    const hint = document.getElementById('typepickerHint');
+    if (detectedType) {
+        const tname = TYPE_NAMES[detectedType] || detectedType;
+        hint.textContent = `Looks like a ${tname} \u2014 confirm or pick the correct type:`;
+    } else {
+        hint.textContent = 'What type of ship is this?';
+    }
+
+    document.querySelectorAll('.type-pick-btn').forEach(btn =>
+        btn.classList.toggle('detected', btn.dataset.type === detectedType));
+
+    showOverlay('typepicker');
+}
+
+async function selectType(type) {
+    hideOverlay('typepicker');
+
+    showOverlay('loading');
+    document.getElementById('loadingTitle').textContent   = 'Finding Your Ship\u2026';
+    document.getElementById('loadingSubtext').textContent = 'Selecting from the fleet database';
+
+    await new Promise(r => setTimeout(r, 600));
+
+    const shipData = pickShipFromDB(type);
+    if (!shipData) {
+        hideOverlay('loading');
+        showToast('No ships found for this type — try another', 'error');
+        return;
+    }
+
+    await buildAndShowCard(type, shipData);
+    hideOverlay('loading');
+}
+
+async function buildAndShowCard(type, shipData) {
+    const enriched = { ...shipData, type, confidence: 'high' };
+    const rarity   = determineRarity(enriched);
+    const pts      = calcPoints(enriched, rarity);
+    const compressedPhoto = await resizeImage(S.capturedDataUrl, 480, 0.65);
+
+    const card = {
+        id:              'ss-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
+        name:            shipData.name           || 'Unknown Ship',
+        line:            shipData.line           || 'Independent',
+        type,
+        length:          shipData.length         || null,
+        width:           shipData.width          || null,
+        height:          shipData.height         || null,
+        tonnage:         shipData.tonnage        || null,
+        yearBuilt:       shipData.yearBuilt      || null,
+        maxPassengers:   shipData.maxPassengers  ?? null,
+        description:     shipData.description    || '',
+        funFact:         shipData.funFact        || '',
+        isRare:          !!shipData.isRare,
+        estimatedValue:  shipData.estimatedValue || null,
+        confidence:      'high',
+        rarity,
+        points:          pts.total,
+        pointsBreakdown: pts,
+        photoDataUrl:    compressedPhoto,
+        capturedAt:      new Date().toISOString(),
+    };
+
+    const isDup = S.collection.some(
+        c => c.name.toLowerCase() === card.name.toLowerCase());
+
+    S.pendingCard        = card;
+    S.pendingIsDuplicate = isDup;
+
+    showResultScreen(card, isDup);
 }
 
 function showResultScreen(card, isDup) {
     document.getElementById('resultCardWrapper').innerHTML = buildFullCard(card);
     document.getElementById('duplicateBanner').classList.toggle('hidden', !isDup);
+    document.getElementById('editDetailsForm').classList.add('hidden');
+
     const addBtn = document.getElementById('addToCollectionBtn');
     if (isDup) {
-        addBtn.textContent = 'Already Collected';
-        addBtn.disabled    = true;
+        addBtn.textContent   = 'Already Collected';
+        addBtn.disabled      = true;
         addBtn.style.opacity = '0.5';
     } else {
         addBtn.textContent   = '\u2713 Add to Fleet';
@@ -515,6 +513,82 @@ function showResultScreen(card, isDup) {
     showOverlay('result');
 }
 
+async function rerollShip() {
+    const type = S.pendingCard?.type;
+    if (!type) return;
+
+    showOverlay('loading');
+    document.getElementById('loadingTitle').textContent   = 'Finding Another Ship\u2026';
+    document.getElementById('loadingSubtext').textContent = 'Rolling the dice';
+
+    await new Promise(r => setTimeout(r, 500));
+
+    const shipData = pickShipFromDB(type);
+    if (!shipData) {
+        hideOverlay('loading');
+        showToast('Only one ship in this type!', 'info');
+        return;
+    }
+
+    await buildAndShowCard(type, shipData);
+    hideOverlay('loading');
+}
+
+function wrongType() {
+    hideOverlay('result');
+    showTypePicker(S.pendingCard?.type || null);
+}
+
+function toggleEditDetails() {
+    const form = document.getElementById('editDetailsForm');
+    const card = S.pendingCard;
+    if (!card) return;
+
+    if (form.classList.contains('hidden')) {
+        document.getElementById('editName').value = card.name;
+        document.getElementById('editLine').value = card.line;
+        document.getElementById('editType').value = card.type;
+        form.classList.remove('hidden');
+        form.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } else {
+        form.classList.add('hidden');
+    }
+}
+
+async function applyEdit() {
+    const card    = S.pendingCard;
+    if (!card) return;
+
+    const newName = document.getElementById('editName').value.trim();
+    const newLine = document.getElementById('editLine').value.trim();
+    const newType = document.getElementById('editType').value;
+
+    if (!newName) { showToast('Ship name is required', 'error'); return; }
+
+    card.name = newName;
+    card.line = newLine || 'Independent';
+
+    if (newType !== card.type) {
+        card.type = newType;
+        const enriched = { ...card, confidence: 'high' };
+        const rarity   = determineRarity(enriched);
+        const pts      = calcPoints(enriched, rarity);
+        card.rarity          = rarity;
+        card.points          = pts.total;
+        card.pointsBreakdown = pts;
+    }
+
+    const isDup = S.collection.some(
+        c => c.name.toLowerCase() === card.name.toLowerCase() && c.id !== card.id);
+    S.pendingIsDuplicate = isDup;
+
+    showResultScreen(card, isDup);
+    showToast('Details updated', 'success');
+}
+
+/* =============================================
+   ADD TO FLEET
+   ============================================= */
 async function addToFleet() {
     const card = S.pendingCard;
     if (!card || S.pendingIsDuplicate) return;
@@ -607,12 +681,14 @@ function showAuthForm(which) {
    EVENT WIRING
    ============================================= */
 document.addEventListener('DOMContentLoaded', () => {
-    // Check config is loaded
     if (typeof FIREBASE === 'undefined' || FIREBASE.apiKey === 'YOUR_FIREBASE_API_KEY') {
-        fatalError('Open <code>firebase-config.js</code> and fill in your Firebase project values and Gemini API key. Both are free!');
+        fatalError('Open <code>firebase-config.js</code> and fill in your Firebase project values.');
         return;
     }
     initFirebase();
+
+    // Start loading TF.js model in background
+    startModelLoad();
 
     // ---- Auth tab switching ----
     document.querySelectorAll('.auth-tab').forEach(btn =>
@@ -689,11 +765,21 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('identifyBtn').addEventListener('click', startIdentify);
     document.getElementById('retakeBtn').addEventListener('click', resetCamera);
 
+    // ---- Type picker ----
+    document.getElementById('closeTypepickerBtn').addEventListener('click', () =>
+        hideOverlay('typepicker'));
+    document.querySelectorAll('.type-pick-btn').forEach(btn =>
+        btn.addEventListener('click', () => selectType(btn.dataset.type)));
+
     // ---- Result overlay ----
     document.getElementById('closeResultBtn').addEventListener('click', () => {
         hideOverlay('result'); S.pendingCard = null;
     });
     document.getElementById('addToCollectionBtn').addEventListener('click', addToFleet);
+    document.getElementById('rerollBtn').addEventListener('click', rerollShip);
+    document.getElementById('wrongTypeBtn').addEventListener('click', wrongType);
+    document.getElementById('editDetailsBtn').addEventListener('click', toggleEditDetails);
+    document.getElementById('applyEditBtn').addEventListener('click', applyEdit);
     document.getElementById('discardBtn').addEventListener('click', () => {
         hideOverlay('result'); S.pendingCard = null;
     });
@@ -721,7 +807,7 @@ document.addEventListener('DOMContentLoaded', () => {
             showOverlay('loading');
             document.getElementById('loadingTitle').textContent   = 'Clearing Fleet\u2026';
             document.getElementById('loadingSubtext').textContent = 'Deleting from cloud';
-            const snap = await shipsRef().get();
+            const snap  = await shipsRef().get();
             const batch = S.db.batch();
             snap.docs.forEach(d => batch.delete(d.ref));
             await batch.commit();

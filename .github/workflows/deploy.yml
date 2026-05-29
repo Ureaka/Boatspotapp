@@ -31,10 +31,9 @@ jobs:
           FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
           FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}
           FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
           mkdir dist
-          cp index.html styles.css app.js manifest.json dist/
+          cp index.html styles.css app.js ships.js manifest.json dist/
           cat > dist/firebase-config.js << ENDOFFILE
           const FIREBASE = {
             apiKey:            "${FIREBASE_API_KEY}",
@@ -44,7 +43,6 @@ jobs:
             messagingSenderId: "${FIREBASE_MESSAGING_SENDER_ID}",
             appId:             "${FIREBASE_APP_ID}"
           };
-          const GROQ_API_KEY = "${GROQ_API_KEY}";
           ENDOFFILE
 
       - name: Setup Pages
