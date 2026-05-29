@@ -28,14 +28,14 @@ SHIP_TYPES = [
 
 # Search terms for each type — more specific = better quality images
 SEARCH_QUERIES = {
-    'cruise':       'large cruise ship ocean passenger vessel',
-    'container':    'container ship cargo vessel stacked boxes sea',
-    'bulk':         'bulk carrier ship dry cargo hold grain',
-    'tanker':       'oil tanker ship crude petroleum sea',
-    'coastguard':   'coast guard cutter patrol vessel ship',
-    'military':     'navy warship destroyer frigate combat vessel',
-    'car-carrier':  'car carrier ship ro-ro vehicle transport vessel',
-    'megayacht':    'superyacht mega yacht luxury vessel large',
+    'cruise':       'cruise ship Royal Caribbean Carnival MSC ocean liner at sea',
+    'container':    'container ship Maersk cargo vessel stacked containers port',
+    'bulk':         'bulk carrier ship dry cargo vessel grain iron ore at sea',
+    'tanker':       'oil tanker VLCC crude tanker ship supertanker at sea',
+    'coastguard':   'coast guard cutter USCG patrol vessel ship harbor',
+    'military':     'navy destroyer warship frigate USS combat vessel at sea',
+    'car-carrier':  'car carrier ship ro-ro vehicle carrier pure car truck carrier',
+    'megayacht':    'superyacht luxury yacht Azzam motor yacht vessel at sea',
 }
 
 IMAGES_PER_CLASS = 180   # images downloaded per ship type
@@ -91,10 +91,15 @@ def download_images():
                 keyword=query,
                 max_num=IMAGES_PER_CLASS,
                 file_idx_offset=existing,
-                filters={'size': 'medium'},
+                filters={'size': 'large', 'type': 'photo'},
             )
         except Exception as e:
             print(f"    Warning: crawl error for {ship_type}: {e}")
+
+        # Delete any tiny files (icons, thumbnails, unrelated images)
+        for f in out_dir.iterdir():
+            if f.is_file() and f.stat().st_size < 15_000:  # under 15KB = junk
+                f.unlink()
 
     print("\nDownload complete.\n")
 
