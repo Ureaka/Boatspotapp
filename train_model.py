@@ -27,15 +27,16 @@ SHIP_TYPES = [
 ]
 
 # Search terms for each type — more specific = better quality images
-SEARCH_QUERIES = {
-    'cruise':       'cruise ship Royal Caribbean Carnival MSC ocean liner at sea',
-    'container':    'container ship Maersk cargo vessel stacked containers port',
-    'bulk':         'bulk carrier ship dry cargo vessel grain iron ore at sea',
-    'tanker':       'oil tanker VLCC crude tanker ship supertanker at sea',
-    'coastguard':   'coast guard cutter USCG patrol vessel ship harbor',
-    'military':     'navy destroyer warship frigate USS combat vessel at sea',
-    'car-carrier':  'car carrier ship ro-ro vehicle carrier pure car truck carrier',
-    'megayacht':    'superyacht luxury yacht Azzam motor yacht vessel at sea',
+# Wikimedia Commons categories — properly tagged, curated ship photos, no API key needed
+WIKI_CATEGORIES = {
+    'cruise':       ['Cruise ships', 'Ocean liners'],
+    'container':    ['Container ships'],
+    'bulk':         ['Bulk carriers'],
+    'tanker':       ['Oil tankers', 'Very large crude carriers'],
+    'coastguard':   ['Coast guard vessels', 'United States Coast Guard cutters'],
+    'military':     ['Destroyers by country', 'Frigates by country', 'Aircraft carriers'],
+    'car-carrier':  ['Pure car carriers', 'Roll-on roll-off ships'],
+    'megayacht':    ['Superyachts', 'Motor yachts'],
 }
 
 IMAGES_PER_CLASS = 180   # images downloaded per ship type
@@ -49,7 +50,7 @@ MODEL_OUT        = Path('model')
 
 def check_deps():
     missing = []
-    for pkg in ['tensorflow', 'sklearn', 'icrawler']:
+    for pkg in ['tensorflow', 'sklearn', 'requests']:
         try:
             __import__(pkg if pkg != 'sklearn' else 'sklearn')
         except ImportError:
@@ -62,13 +63,54 @@ def check_deps():
 
 
 def download_images():
-    from icrawler.builtin import BingImageCrawler
+    import requests
+    import urllib.request
+
+    WIKI_API = 'https://commons.wikimedia.org/w/api.php'
+    HEADERS  = {'User-Agent': 'ShipSpotter/1.0 (training data collector)'}
+
+    def get_image_urls(category, limit=80):
+        """Fetch image URLs from a Wikimedia Commons category."""
+        # Step 1: get list of image files in the category
+        r = requests.get(WIKI_API, headers=HEADERS, timeout=15, params={
+            'action':  'query',
+            'list':    'categorymembers',
+            'cmtitle': f'Category:{category}',
+            'cmtype':  'file',
+            'cmlimit': limit,
+            'format':  'json',
+        })
+        members = r.json().get('query', {}).get('categorymembers', [])
+        files   = [m['title'] for m in members
+                   if m['title'].lower().endswith(('.jpg', '.jpeg', '.png'))]
+        if not files:
+            return []
+
+        # Step 2: get thumbnail URLs (640px wide)
+        urls = []
+        for i in range(0, len(files), 50):
+            batch = files[i:i+50]
+            r2 = requests.get(WIKI_API, headers=HEADERS, timeout=15, params={
+                'action':    'query',
+                'titles':    '|'.join(batch),
+                'prop':      'imageinfo',
+                'iiprop':    'url',
+                'iiurlwidth': 640,
+                'format':    'json',
+            })
+            for page in r2.json().get('query', {}).get('pages', {}).values():
+                info = page.get('imageinfo', [])
+                if info:
+                    url = info[0].get('thumburl') or info[0].get('url')
+                    if url:
+                        urls.append(url)
+        return urls
 
     print(f"\n{'='*58}")
-    print(f"  Downloading ~{IMAGES_PER_CLASS} images per ship type")
+    print(f"  Downloading ship images from Wikimedia Commons")
     print(f"{'='*58}\n")
 
-    for ship_type, query in SEARCH_QUERIES.items():
+    for ship_type, categories in WIKI_CATEGORIES.items():
         out_dir  = DATA_DIR / ship_type
         existing = len(list(out_dir.glob('*.jpg'))) + len(list(out_dir.glob('*.png'))) \
                    if out_dir.exists() else 0
@@ -77,29 +119,36 @@ def download_images():
             print(f"  {ship_type:12s} — {existing} images already present, skipping")
             continue
 
-        print(f"  {ship_type:12s} — searching: \"{query}\"")
         out_dir.mkdir(parents=True, exist_ok=True)
+        all_urls = []
+        for cat in categories:
+            all_urls += get_image_urls(cat, limit=100)
 
-        crawler = BingImageCrawler(
-            storage={'root_dir': str(out_dir)},
-            feeder_threads=1,
-            parser_threads=1,
-            downloader_threads=4,
-        )
-        try:
-            crawler.crawl(
-                keyword=query,
-                max_num=IMAGES_PER_CLASS,
-                file_idx_offset=existing,
-                filters={'size': 'large', 'type': 'photo'},
-            )
-        except Exception as e:
-            print(f"    Warning: crawl error for {ship_type}: {e}")
+        # Remove duplicates
+        all_urls = list(dict.fromkeys(all_urls))
+        print(f"  {ship_type:12s} — {len(all_urls)} URLs found, downloading...")
 
-        # Delete any tiny files (icons, thumbnails, unrelated images)
-        for f in out_dir.iterdir():
-            if f.is_file() and f.stat().st_size < 15_000:  # under 15KB = junk
-                f.unlink()
+        downloaded = 0
+        for idx, url in enumerate(all_urls):
+            if downloaded >= IMAGES_PER_CLASS:
+                break
+            dest = out_dir / f'{idx:04d}.jpg'
+            if dest.exists():
+                downloaded += 1
+                continue
+            try:
+                req = urllib.request.Request(url, headers=HEADERS)
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = resp.read()
+                if len(data) < 15_000:   # skip tiny/broken images
+                    continue
+                with open(dest, 'wb') as f:
+                    f.write(data)
+                downloaded += 1
+            except Exception:
+                pass
+
+        print(f"  {ship_type:12s} — {downloaded} images saved")
 
     print("\nDownload complete.\n")
 
