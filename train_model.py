@@ -74,7 +74,7 @@ MODEL_OUT        = Path('model')
 
 def check_deps():
     missing = []
-    for pkg in ['tensorflow', 'sklearn', 'requests']:
+    for pkg in ['tensorflow', 'sklearn', 'duckduckgo_search']:
         try:
             __import__(pkg if pkg != 'sklearn' else 'sklearn')
         except ImportError:
@@ -87,179 +87,72 @@ def check_deps():
 
 
 def download_images():
-    import requests
     import urllib.request
+    import time
+    from duckduckgo_search import DDGS
 
-    WIKI_API = 'https://commons.wikimedia.org/w/api.php'
-    HEADERS  = {'User-Agent': 'ShipSpotter/1.0 (training data collector)'}
+    HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 
-    def get_image_urls(category, limit=80):
-        """Fetch image URLs from a Wikimedia Commons category."""
-        import time
-
+    def fetch(url, dest):
         try:
-            r = requests.get(WIKI_API, headers=HEADERS, timeout=15, params={
-                'action':  'query',
-                'list':    'categorymembers',
-                'cmtitle': f'Category:{category}',
-                'cmtype':  'file',
-                'cmlimit': limit,
-                'format':  'json',
-            })
-            members = r.json().get('query', {}).get('categorymembers', [])
-        except Exception as e:
-            print(f"    Warning: could not fetch category '{category}': {e}")
-            return []
-
-        files = [m['title'] for m in members
-                 if m['title'].lower().endswith(('.jpg', '.jpeg', '.png'))]
-        if not files:
-            return []
-
-        urls = []
-        for i in range(0, len(files), 25):   # smaller batches = fewer empty responses
-            batch = files[i:i+25]
-            time.sleep(0.3)                  # be polite to Wikimedia API
-            try:
-                r2 = requests.get(WIKI_API, headers=HEADERS, timeout=15, params={
-                    'action':     'query',
-                    'titles':     '|'.join(batch),
-                    'prop':       'imageinfo',
-                    'iiprop':     'url',
-                    'iiurlwidth': 640,
-                    'format':     'json',
-                })
-                if not r2.text.strip():
-                    continue
-                for page in r2.json().get('query', {}).get('pages', {}).values():
-                    info = page.get('imageinfo', [])
-                    if info:
-                        url = info[0].get('thumburl') or info[0].get('url')
-                        if url:
-                            urls.append(url)
-            except Exception:
-                continue   # skip bad batches, keep going
-
-        return urls
+            req = urllib.request.Request(url, headers=HEADERS)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = resp.read()
+            if len(data) < 15_000:
+                return False
+            with open(dest, 'wb') as f:
+                f.write(data)
+            return True
+        except Exception:
+            return False
 
     print(f"\n{'='*58}")
-    print(f"  Downloading ship images from Wikimedia Commons")
+    print(f"  Downloading images by ship name from ships.js")
     print(f"{'='*58}\n")
-
-    for ship_type, categories in WIKI_CATEGORIES.items():
-        out_dir  = DATA_DIR / ship_type
-        existing = len(list(out_dir.glob('*.jpg'))) + len(list(out_dir.glob('*.png'))) \
-                   if out_dir.exists() else 0
-
-        if existing >= int(IMAGES_PER_CLASS * 0.8):
-            print(f"  {ship_type:12s} — {existing} images already present, skipping")
-            continue
-
-        out_dir.mkdir(parents=True, exist_ok=True)
-        all_urls = []
-        for cat in categories:
-            all_urls += get_image_urls(cat, limit=100)
-
-        # Remove duplicates
-        all_urls = list(dict.fromkeys(all_urls))
-        print(f"  {ship_type:12s} — {len(all_urls)} URLs found, downloading...")
-
-        downloaded = 0
-        for idx, url in enumerate(all_urls):
-            if downloaded >= IMAGES_PER_CLASS:
-                break
-            dest = out_dir / f'{idx:04d}.jpg'
-            if dest.exists():
-                downloaded += 1
-                continue
-            try:
-                req = urllib.request.Request(url, headers=HEADERS)
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    data = resp.read()
-                if len(data) < 15_000:   # skip tiny/broken images
-                    continue
-                with open(dest, 'wb') as f:
-                    f.write(data)
-                downloaded += 1
-            except Exception:
-                pass
-
-        print(f"  {ship_type:12s} — {downloaded} images saved")
-
-    # Second pass: search for each specific ship by name
-    print("\nSearching for specific ships by name...")
-
-    def search_ship_images(ship_name, limit=8):
-        """Search Wikimedia Commons for images of a specific ship by name."""
-        import time
-        try:
-            time.sleep(0.3)
-            r = requests.get(WIKI_API, headers=HEADERS, timeout=15, params={
-                'action':    'query',
-                'list':      'search',
-                'srsearch':  f'{ship_name} ship',
-                'srnamespace': 6,
-                'srlimit':   limit,
-                'format':    'json',
-            })
-            if not r.text.strip():
-                return []
-            results = r.json().get('query', {}).get('search', [])
-            titles  = [res['title'] for res in results
-                       if res['title'].lower().endswith(('.jpg', '.jpeg', '.png'))]
-            if not titles:
-                return []
-
-            time.sleep(0.2)
-            r2 = requests.get(WIKI_API, headers=HEADERS, timeout=15, params={
-                'action':     'query',
-                'titles':     '|'.join(titles),
-                'prop':       'imageinfo',
-                'iiprop':     'url',
-                'iiurlwidth': 640,
-                'format':     'json',
-            })
-            if not r2.text.strip():
-                return []
-            urls = []
-            for page in r2.json().get('query', {}).get('pages', {}).values():
-                info = page.get('imageinfo', [])
-                if info:
-                    url = info[0].get('thumburl') or info[0].get('url')
-                    if url:
-                        urls.append(url)
-            return urls
-        except Exception:
-            return []
 
     for ship_type, names in SHIP_NAMES.items():
         out_dir = DATA_DIR / ship_type
         out_dir.mkdir(parents=True, exist_ok=True)
+
         existing = len(list(out_dir.glob('*.jpg'))) + len(list(out_dir.glob('*.png')))
-        added = 0
+        if existing >= int(IMAGES_PER_CLASS * 0.8):
+            print(f"  {ship_type:12s} — {existing} images already present, skipping")
+            continue
+
+        total_saved = existing
+        print(f"  {ship_type:12s}:")
 
         for ship_name in names:
-            urls = search_ship_images(ship_name)
-            for url in urls:
-                dest = out_dir / f'named_{ship_name[:20].replace(" ","_")}_{added:03d}.jpg'
-                if dest.exists():
-                    added += 1
+            if total_saved >= IMAGES_PER_CLASS:
+                break
+            query = f'"{ship_name}" ship photograph'
+            try:
+                time.sleep(0.8)
+                results = list(DDGS().images(keywords=query, max_results=20, type_image='photo'))
+            except Exception as e:
+                print(f"    {ship_name[:35]:35s} — search failed: {e}")
+                continue
+
+            saved = 0
+            for r in results:
+                if total_saved >= IMAGES_PER_CLASS:
+                    break
+                url  = r.get('image', '')
+                if not url:
                     continue
-                try:
-                    req = urllib.request.Request(url, headers=HEADERS)
-                    with urllib.request.urlopen(req, timeout=10) as resp:
-                        data = resp.read()
-                    if len(data) < 15_000:
-                        continue
-                    with open(dest, 'wb') as f:
-                        f.write(data)
-                    added += 1
-                except Exception:
-                    pass
+                slug = ship_name[:25].replace(' ', '_').replace('/', '-')
+                dest = out_dir / f'{slug}_{saved:02d}.jpg'
+                if dest.exists():
+                    saved += 1; total_saved += 1
+                    continue
+                if fetch(url, dest):
+                    saved += 1; total_saved += 1
 
-        print(f"  {ship_type:12s} — +{added} named ship images")
+            print(f"    {ship_name[:35]:35s} — {saved} images")
 
-    print("\nDownload complete.\n")
+        print(f"  {ship_type:12s} — {total_saved} total\n")
+
+    print("Download complete.\n")
 
 
 def extract_features():
