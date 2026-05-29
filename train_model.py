@@ -341,9 +341,19 @@ def train_head(X, y, feature_dim):
         X, y_cat, test_size=0.2, random_state=42, stratify=y
     )
 
-    # Handle class imbalance (some ship types are rarer to find online)
-    class_weights_arr = compute_class_weight('balanced', classes=np.arange(n_classes), y=y)
-    class_weights = {i: w for i, w in enumerate(class_weights_arr)}
+    # Only compute weights for classes that actually appear in the dataset
+    present = np.unique(y.argmax(1))
+    if len(present) < 2:
+        print(f"\nERROR: Only {len(present)} ship type(s) have images.")
+        print("Run the script again to download more — it will pick up where it left off.")
+        sys.exit(1)
+    if len(present) < n_classes:
+        missing = [SHIP_TYPES[i] for i in range(n_classes) if i not in present]
+        print(f"WARNING: Missing images for: {', '.join(missing)}")
+        print("Training with available types only.\n")
+
+    class_weights_arr = compute_class_weight('balanced', classes=present, y=y.argmax(1))
+    class_weights = {int(c): w for c, w in zip(present, class_weights_arr)}
 
     print(f"\nTrain: {len(X_train)}  |  Val: {len(X_val)}")
     print(f"Classes: {n_classes}  |  Epochs: {EPOCHS}\n")
