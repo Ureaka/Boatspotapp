@@ -56,7 +56,7 @@ function initFirebase() {
     S.db   = firebase.firestore();
     S.auth = firebase.auth();
 
-    S.geminiKey = typeof GEMINI_API_KEY !== 'undefined' ? GEMINI_API_KEY : '';
+    S.geminiKey = typeof GROQ_API_KEY !== 'undefined' ? GROQ_API_KEY : '';
 
     // Listen for auth state changes
     S.auth.onAuthStateChanged(onAuthChange);
@@ -185,37 +185,41 @@ Use real-world data when you can identify the vessel. Otherwise provide accurate
 
 async function callGemini(imageDataUrl) {
     const key = S.geminiKey;
-    if (!key || key === 'YOUR_GEMINI_API_KEY') {
-        throw new Error('No Gemini API key set. Open Settings and add your free key from aistudio.google.com');
+    if (!key || key === 'YOUR_GROQ_API_KEY') {
+        throw new Error('No API key configured.');
     }
 
     const resized = await resizeImage(imageDataUrl, 900, 0.75);
     const b64     = resized.split(',')[1];
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`;
-
-    const resp = await fetch(url, {
+    const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+            'Content-Type':  'application/json',
+            'Authorization': `Bearer ${key}`,
+        },
         body: JSON.stringify({
-            contents: [{
-                parts: [
-                    { text: IDENTIFY_PROMPT },
-                    { inline_data: { mime_type: 'image/jpeg', data: b64 } },
+            model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+            max_tokens: 1024,
+            temperature: 0.2,
+            messages: [{
+                role: 'user',
+                content: [
+                    { type: 'text',      text: IDENTIFY_PROMPT },
+                    { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${b64}` } },
                 ],
             }],
-            generationConfig: { temperature: 0.2, maxOutputTokens: 1024 },
         }),
     });
 
     if (!resp.ok) {
         const err = await resp.json().catch(() => ({}));
-        const msg = err?.error?.message || ('Gemini API error ' + resp.status);
+        const msg = err?.error?.message || ('API error ' + resp.status);
         throw new Error(msg);
     }
 
     const data    = await resp.json();
-    const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? '';
+    const rawText = data?.choices?.[0]?.message?.content?.trim() ?? '';
 
     if (rawText === 'null') return null;
     const match = rawText.match(/\{[\s\S]*\}/);
