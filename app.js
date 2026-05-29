@@ -38,8 +38,10 @@ const S = {
     pendingIsDuplicate:false,
     capturedDataUrl:   null,
     currentFilter:     'all',
-    tfModel:           null,
-    knn:               null,   // KNN classifier trained on user-saved photos
+    tfModel:           null,   // MobileNet V2 feature extractor (CDN)
+    shipClassifier:    null,   // Custom trained head (model/model.json)
+    shipLabels:        null,   // Class order from model/labels.json
+    knn:               null,   // KNN trained on user-saved photos
     db:                null,
     auth:              null,
 };
@@ -154,14 +156,27 @@ function startModelLoad() {
         console.warn('MobileNet not available — type picker will show without pre-selection');
         return;
     }
-    modelLoadPromise = mobilenet.load({ version: 2, alpha: 1.0 })
-        .then(async m => {
-            S.tfModel = m;
-            await initKNN();
-            console.log('MobileNet + KNN ready');
-            return m;
-        })
-        .catch(e => { console.warn('MobileNet load failed:', e); return null; });
+    modelLoadPromise = (async () => {
+        // 1. Load MobileNet feature extractor from CDN
+        S.tfModel = await mobilenet.load({ version: 2, alpha: 1.0 });
+        console.log('MobileNet ready');
+
+        // 2. Try loading the custom trained classifier head (present after running train_model.py)
+        try {
+            const [model, labelsRes] = await Promise.all([
+                tf.loadLayersModel('./model/model.json'),
+                fetch('./model/labels.json').then(r => r.json()),
+            ]);
+            S.shipClassifier = model;
+            S.shipLabels     = labelsRes;
+            console.log('Custom ship classifier loaded — types:', S.shipLabels.join(', '));
+        } catch (_) {
+            console.log('No custom model found — using KNN only (run train_model.py to generate one)');
+        }
+
+        // 3. Restore KNN dataset from localStorage
+        await initKNN();
+    })().catch(e => console.warn('Model load failed:', e));
 }
 
 /* =============================================
@@ -228,21 +243,56 @@ function loadImageFromDataUrl(dataUrl) {
 }
 
 async function classifyShipType(imgEl) {
-    // KNN only — raw MobileNet ImageNet labels don't meaningfully distinguish ship types
-    if (!S.tfModel || !S.knn || S.knn.getNumClasses() === 0) return null;
+    if (!S.tfModel) return null;
+
+    // Extract feature embedding once — reuse for both classifiers
+    let embedding = null;
     try {
-        const embedding     = S.tfModel.infer(imgEl, true);
-        const totalExamples = Object.values(S.knn.getClassExampleCount()).reduce((a,b)=>a+b,0);
-        const k             = Math.min(3, totalExamples);
-        const result        = await S.knn.predictClass(embedding, k);
-        const conf          = result.confidences[result.label] || 0;
-        if (conf >= 0.55) {
-            console.log(`KNN: ${result.label} (${Math.round(conf*100)}%)`);
-            return result.label;
-        }
+        embedding = S.tfModel.infer(imgEl, true); // 1280-dim feature vector
     } catch (e) {
-        console.warn('KNN predict error:', e);
+        console.warn('Feature extraction error:', e);
+        return null;
     }
+
+    // 1. Custom trained model (most accurate — only present after train_model.py)
+    if (S.shipClassifier && S.shipLabels) {
+        try {
+            const probs    = S.shipClassifier.predict(embedding);
+            const probsArr = await probs.data();
+            probs.dispose();
+
+            const maxIdx = probsArr.indexOf(Math.max(...probsArr));
+            const conf   = probsArr[maxIdx];
+
+            if (conf >= 0.45) {
+                const label = S.shipLabels[maxIdx];
+                console.log(`Classifier: ${label} (${Math.round(conf * 100)}%)`);
+                embedding.dispose();
+                return label;
+            }
+        } catch (e) {
+            console.warn('Classifier error:', e);
+        }
+    }
+
+    // 2. KNN trained on user-saved photos
+    if (S.knn && S.knn.getNumClasses() > 0) {
+        try {
+            const totalExamples = Object.values(S.knn.getClassExampleCount()).reduce((a,b)=>a+b,0);
+            const k             = Math.min(3, totalExamples);
+            const result        = await S.knn.predictClass(embedding, k);
+            const conf          = result.confidences[result.label] || 0;
+            if (conf >= 0.55) {
+                console.log(`KNN: ${result.label} (${Math.round(conf * 100)}%)`);
+                embedding.dispose();
+                return result.label;
+            }
+        } catch (e) {
+            console.warn('KNN error:', e);
+        }
+    }
+
+    embedding.dispose();
     return null;
 }
 

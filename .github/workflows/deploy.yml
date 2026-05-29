@@ -34,6 +34,7 @@ jobs:
         run: |
           mkdir dist
           cp index.html styles.css app.js ships.js manifest.json dist/
+          if [ -d model ] && [ "$(ls -A model/*.json model/*.bin 2>/dev/null)" ]; then cp -r model dist/model; fi
           cat > dist/firebase-config.js << ENDOFFILE
           const FIREBASE = {
             apiKey:            "${FIREBASE_API_KEY}",
