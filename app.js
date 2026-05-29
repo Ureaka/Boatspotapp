@@ -228,39 +228,21 @@ function loadImageFromDataUrl(dataUrl) {
 }
 
 async function classifyShipType(imgEl) {
-    if (!S.tfModel) return null;
-
-    // 1. Try KNN first — this improves as users save ships
-    if (S.knn && S.knn.getNumClasses() > 0) {
-        try {
-            const embedding = S.tfModel.infer(imgEl, true);
-            const totalExamples = Object.values(S.knn.getClassExampleCount()).reduce((a,b)=>a+b,0);
-            const k = Math.min(3, totalExamples);
-            const result = await S.knn.predictClass(embedding, k);
-            const conf   = result.confidences[result.label] || 0;
-            if (conf >= 0.5) {
-                console.log(`KNN result: ${result.label} (${Math.round(conf*100)}% confidence)`);
-                return result.label;
-            }
-        } catch (e) {
-            console.warn('KNN predict error:', e);
-        }
-    }
-
-    // 2. Fall back to MobileNet ImageNet label mapping
+    // KNN only — raw MobileNet ImageNet labels don't meaningfully distinguish ship types
+    if (!S.tfModel || !S.knn || S.knn.getNumClasses() === 0) return null;
     try {
-        const preds = await S.tfModel.classify(imgEl, 10);
-        if (typeof LABEL_TO_TYPE === 'undefined') return null;
-        for (const p of preds) {
-            const lbl = p.className.toLowerCase();
-            for (const [key, type] of Object.entries(LABEL_TO_TYPE)) {
-                if (lbl.includes(key.toLowerCase())) return type;
-            }
+        const embedding     = S.tfModel.infer(imgEl, true);
+        const totalExamples = Object.values(S.knn.getClassExampleCount()).reduce((a,b)=>a+b,0);
+        const k             = Math.min(3, totalExamples);
+        const result        = await S.knn.predictClass(embedding, k);
+        const conf          = result.confidences[result.label] || 0;
+        if (conf >= 0.55) {
+            console.log(`KNN: ${result.label} (${Math.round(conf*100)}%)`);
+            return result.label;
         }
     } catch (e) {
-        console.warn('MobileNet classification error:', e);
+        console.warn('KNN predict error:', e);
     }
-
     return null;
 }
 
@@ -487,27 +469,15 @@ function openDetail(id) {
 async function startIdentify() {
     if (!S.capturedDataUrl) return;
 
-    showOverlay('loading');
-    document.getElementById('loadingTitle').textContent   = 'Scanning Image\u2026';
-    document.getElementById('loadingSubtext').textContent = 'Detecting ship type';
-
-    // Wait for model if still loading (8-second timeout)
-    if (!S.tfModel && modelLoadPromise) {
-        try {
-            await Promise.race([
-                modelLoadPromise,
-                new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
-            ]);
-        } catch (_) { /* proceed without model */ }
-    }
-
+    // Try KNN (only — skip raw MobileNet ImageNet labels, they're useless for ship types)
     let detectedType = null;
-    if (S.tfModel) {
-        const img = document.getElementById('capturedImage');
-        detectedType = await classifyShipType(img);
+    if (S.tfModel && S.knn && S.knn.getNumClasses() > 0) {
+        try {
+            const img = document.getElementById('capturedImage');
+            detectedType = await classifyShipType(img);
+        } catch (_) { /* ignore */ }
     }
 
-    hideOverlay('loading');
     showTypePicker(detectedType);
 }
 
@@ -515,7 +485,7 @@ function showTypePicker(detectedType) {
     const hint = document.getElementById('typepickerHint');
     if (detectedType) {
         const tname = TYPE_NAMES[detectedType] || detectedType;
-        hint.textContent = `Looks like a ${tname} \u2014 confirm or pick the correct type:`;
+        hint.textContent = `Looks similar to ships you\u2019ve saved before \u2014 is it a ${tname}?`;
     } else {
         hint.textContent = 'What type of ship is this?';
     }
