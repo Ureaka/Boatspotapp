@@ -49,14 +49,14 @@ MODEL_OUT        = Path('model')
 
 def check_deps():
     missing = []
-    for pkg in ['tensorflow', 'tensorflowjs', 'sklearn', 'icrawler']:
+    for pkg in ['tensorflow', 'sklearn', 'icrawler']:
         try:
             __import__(pkg if pkg != 'sklearn' else 'sklearn')
         except ImportError:
             missing.append(pkg)
     if missing:
         print("Missing packages. Run:\n")
-        print(f"  pip install -r requirements.txt\n")
+        print(f"  py -m pip install -r requirements.txt\n")
         print(f"Missing: {', '.join(missing)}")
         sys.exit(1)
 
@@ -241,15 +241,36 @@ def train_head(X, y, feature_dim):
 
 
 def export_tfjs(head, label_map):
-    import tensorflowjs as tfjs
+    import subprocess
+
+    # Save as H5 first (no tensorflowjs Python import needed)
+    h5_path = 'ship_classifier.h5'
+    head.save(h5_path)
+    print(f"\nSaved Keras model to {h5_path}")
 
     if MODEL_OUT.exists():
         shutil.rmtree(MODEL_OUT)
     MODEL_OUT.mkdir(parents=True)
 
-    tfjs.converters.save_keras_model(head, str(MODEL_OUT))
+    # Try the tensorflowjs CLI (works even when Python import is broken)
+    print("Converting to TF.js format...")
+    result = subprocess.run(
+        ['tensorflowjs_converter', '--input_format=keras', h5_path, str(MODEL_OUT)],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        result = subprocess.run(
+            ['py', '-m', 'tensorflowjs.converters.converter',
+             '--input_format=keras', h5_path, str(MODEL_OUT)],
+            capture_output=True, text=True
+        )
+    if result.returncode != 0:
+        print("CLI conversion failed — using manual export instead...")
+        export_manual(head)
+    else:
+        print("Conversion successful.")
 
-    # Save the class order so the app knows which output index = which ship type
+    # Save class label order so app knows index 0 = cruise, index 1 = container, etc.
     with open(MODEL_OUT / 'labels.json', 'w') as f:
         json.dump(SHIP_TYPES, f)
 
@@ -262,13 +283,53 @@ def export_tfjs(head, label_map):
     print(f"  {'─'*43}")
     print(f"  {'TOTAL':35s}  {total / 1024:6.1f} KB")
 
-    print(f"""
+    print("""
 Next steps:
   1. git add model/
   2. git commit -m "Add trained ship classifier"
   3. git push
   The app will automatically load and use the model.
 """)
+
+
+def export_manual(head):
+    """Export model weights to TF.js format without using the tensorflowjs package."""
+    weights    = head.get_weights()
+    bin_data   = b''.join(w.astype(np.float32).tobytes() for w in weights)
+
+    with open(MODEL_OUT / 'group1-shard1of1.bin', 'wb') as f:
+        f.write(bin_data)
+
+    weight_specs = []
+    offset = 0
+    for layer in head.layers:
+        for w in layer.weights:
+            arr    = w.numpy().astype(np.float32)
+            nbytes = arr.nbytes
+            weight_specs.append({
+                'name':       w.name,
+                'shape':      list(arr.shape),
+                'dtype':      'float32',
+                'byteOffset': offset,
+                'byteLength': nbytes,
+            })
+            offset += nbytes
+
+    model_json = {
+        'format':        'layers-model',
+        'generatedBy':   'ShipSpotter train_model.py',
+        'convertedBy':   'manual',
+        'modelTopology': json.loads(head.to_json()),
+        'weightsManifest': [{
+            'paths':   ['group1-shard1of1.bin'],
+            'weights': weight_specs,
+        }],
+    }
+
+    with open(MODEL_OUT / 'model.json', 'w') as f:
+        json.dump(model_json, f)
+
+    print("Manual TF.js export complete.")
 
 
 if __name__ == '__main__':
