@@ -494,11 +494,7 @@ async function startIdentify() {
         hideOverlay('loading');
         console.error(err);
         const raw = err.message || '';
-        const msg =
-            raw.includes('API_KEY_INVALID') || raw.includes('API key') ? 'Gemini API key error \u2014 contact the app owner' :
-            raw.includes('429') ? 'Rate limited \u2014 wait a moment (free tier: 15 req/min)' :
-            raw.includes('No Gemini') ? err.message :
-            'Identification failed: ' + raw.slice(0, 80);
+        const msg = 'Error: ' + raw.slice(0, 120);
         showToast(msg, 'error');
     }
 }
