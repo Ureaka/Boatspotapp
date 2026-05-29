@@ -39,10 +39,12 @@ const S = {
     capturedDataUrl:   null,
     currentFilter:     'all',
     tfModel:           null,
+    knn:               null,   // KNN classifier trained on user-saved photos
     db:                null,
     auth:              null,
 };
 
+const KNN_STORAGE_KEY = 'shipspotter-knn-v1';
 // Promise for background model loading
 let modelLoadPromise = null;
 
@@ -153,12 +155,99 @@ function startModelLoad() {
         return;
     }
     modelLoadPromise = mobilenet.load({ version: 2, alpha: 1.0 })
-        .then(m => { S.tfModel = m; console.log('MobileNet ready'); return m; })
+        .then(async m => {
+            S.tfModel = m;
+            await initKNN();
+            console.log('MobileNet + KNN ready');
+            return m;
+        })
         .catch(e => { console.warn('MobileNet load failed:', e); return null; });
+}
+
+/* =============================================
+   KNN CLASSIFIER — learns from saved photos
+   ============================================= */
+async function initKNN() {
+    if (typeof knnClassifier === 'undefined') return;
+    S.knn = knnClassifier.create();
+
+    // Restore persisted dataset from localStorage
+    try {
+        const raw = localStorage.getItem(KNN_STORAGE_KEY);
+        if (!raw) return;
+        const saved = JSON.parse(raw);
+        const dataset = {};
+        for (const [label, d] of Object.entries(saved)) {
+            dataset[label] = tf.tensor(d.values, d.shape);
+        }
+        S.knn.setClassifierDataset(dataset);
+        const counts = S.knn.getClassExampleCount();
+        const total  = Object.values(counts).reduce((a, b) => a + b, 0);
+        console.log(`KNN restored: ${total} examples across ${Object.keys(counts).length} types`);
+    } catch (e) {
+        console.warn('Could not restore KNN dataset:', e);
+    }
+}
+
+async function saveKNNDataset() {
+    if (!S.knn || S.knn.getNumClasses() === 0) return;
+    try {
+        const dataset = S.knn.getClassifierDataset();
+        const serializable = {};
+        for (const [label, tensor] of Object.entries(dataset)) {
+            serializable[label] = { values: Array.from(tensor.dataSync()), shape: tensor.shape };
+        }
+        localStorage.setItem(KNN_STORAGE_KEY, JSON.stringify(serializable));
+    } catch (e) {
+        console.warn('Could not save KNN dataset:', e);
+    }
+}
+
+async function addPhotoToKNN(dataUrl, shipType) {
+    if (!S.tfModel || !S.knn) return;
+    try {
+        const img       = await loadImageFromDataUrl(dataUrl);
+        const embedding = S.tfModel.infer(img, true); // penultimate layer = feature vector
+        S.knn.addExample(embedding, shipType);
+        await saveKNNDataset();
+        const counts = S.knn.getClassExampleCount();
+        const total  = Object.values(counts).reduce((a, b) => a + b, 0);
+        console.log(`KNN trained: ${total} total examples — ${shipType} now has ${counts[shipType]}`);
+    } catch (e) {
+        console.warn('KNN training error:', e);
+    }
+}
+
+function loadImageFromDataUrl(dataUrl) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload  = () => resolve(img);
+        img.onerror = reject;
+        img.src = dataUrl;
+    });
 }
 
 async function classifyShipType(imgEl) {
     if (!S.tfModel) return null;
+
+    // 1. Try KNN first — this improves as users save ships
+    if (S.knn && S.knn.getNumClasses() > 0) {
+        try {
+            const embedding = S.tfModel.infer(imgEl, true);
+            const totalExamples = Object.values(S.knn.getClassExampleCount()).reduce((a,b)=>a+b,0);
+            const k = Math.min(3, totalExamples);
+            const result = await S.knn.predictClass(embedding, k);
+            const conf   = result.confidences[result.label] || 0;
+            if (conf >= 0.5) {
+                console.log(`KNN result: ${result.label} (${Math.round(conf*100)}% confidence)`);
+                return result.label;
+            }
+        } catch (e) {
+            console.warn('KNN predict error:', e);
+        }
+    }
+
+    // 2. Fall back to MobileNet ImageNet label mapping
     try {
         const preds = await S.tfModel.classify(imgEl, 10);
         if (typeof LABEL_TO_TYPE === 'undefined') return null;
@@ -168,11 +257,11 @@ async function classifyShipType(imgEl) {
                 if (lbl.includes(key.toLowerCase())) return type;
             }
         }
-        return null;
     } catch (e) {
-        console.warn('Classification error:', e);
-        return null;
+        console.warn('MobileNet classification error:', e);
     }
+
+    return null;
 }
 
 /* =============================================
@@ -597,6 +686,9 @@ async function addToFleet() {
     addBtn.disabled    = true;
     addBtn.textContent = 'Saving\u2026';
 
+    // Capture before resetCamera() clears it
+    const trainingDataUrl = S.capturedDataUrl;
+
     try {
         await saveCardToFirestore(card);
         S.collection.unshift(card);
@@ -606,6 +698,11 @@ async function addToFleet() {
         resetCamera();
         showToast(`${card.name} added! +${fmt(card.points)} pts`, 'success');
         setTimeout(() => switchTab('collection'), 400);
+
+        // Train KNN in background — doesn't block the UI
+        if (trainingDataUrl) {
+            addPhotoToKNN(trainingDataUrl, card.type).catch(() => {});
+        }
     } catch (e) {
         console.error(e);
         showToast('Could not save to cloud \u2014 check connection', 'error');
