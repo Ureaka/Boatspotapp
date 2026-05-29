@@ -71,39 +71,51 @@ def download_images():
 
     def get_image_urls(category, limit=80):
         """Fetch image URLs from a Wikimedia Commons category."""
-        # Step 1: get list of image files in the category
-        r = requests.get(WIKI_API, headers=HEADERS, timeout=15, params={
-            'action':  'query',
-            'list':    'categorymembers',
-            'cmtitle': f'Category:{category}',
-            'cmtype':  'file',
-            'cmlimit': limit,
-            'format':  'json',
-        })
-        members = r.json().get('query', {}).get('categorymembers', [])
-        files   = [m['title'] for m in members
-                   if m['title'].lower().endswith(('.jpg', '.jpeg', '.png'))]
+        import time
+
+        try:
+            r = requests.get(WIKI_API, headers=HEADERS, timeout=15, params={
+                'action':  'query',
+                'list':    'categorymembers',
+                'cmtitle': f'Category:{category}',
+                'cmtype':  'file',
+                'cmlimit': limit,
+                'format':  'json',
+            })
+            members = r.json().get('query', {}).get('categorymembers', [])
+        except Exception as e:
+            print(f"    Warning: could not fetch category '{category}': {e}")
+            return []
+
+        files = [m['title'] for m in members
+                 if m['title'].lower().endswith(('.jpg', '.jpeg', '.png'))]
         if not files:
             return []
 
-        # Step 2: get thumbnail URLs (640px wide)
         urls = []
-        for i in range(0, len(files), 50):
-            batch = files[i:i+50]
-            r2 = requests.get(WIKI_API, headers=HEADERS, timeout=15, params={
-                'action':    'query',
-                'titles':    '|'.join(batch),
-                'prop':      'imageinfo',
-                'iiprop':    'url',
-                'iiurlwidth': 640,
-                'format':    'json',
-            })
-            for page in r2.json().get('query', {}).get('pages', {}).values():
-                info = page.get('imageinfo', [])
-                if info:
-                    url = info[0].get('thumburl') or info[0].get('url')
-                    if url:
-                        urls.append(url)
+        for i in range(0, len(files), 25):   # smaller batches = fewer empty responses
+            batch = files[i:i+25]
+            time.sleep(0.3)                  # be polite to Wikimedia API
+            try:
+                r2 = requests.get(WIKI_API, headers=HEADERS, timeout=15, params={
+                    'action':     'query',
+                    'titles':     '|'.join(batch),
+                    'prop':       'imageinfo',
+                    'iiprop':     'url',
+                    'iiurlwidth': 640,
+                    'format':     'json',
+                })
+                if not r2.text.strip():
+                    continue
+                for page in r2.json().get('query', {}).get('pages', {}).values():
+                    info = page.get('imageinfo', [])
+                    if info:
+                        url = info[0].get('thumburl') or info[0].get('url')
+                        if url:
+                            urls.append(url)
+            except Exception:
+                continue   # skip bad batches, keep going
+
         return urls
 
     print(f"\n{'='*58}")
