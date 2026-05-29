@@ -27,6 +27,30 @@ SHIP_TYPES = [
 ]
 
 # Search terms for each type — more specific = better quality images
+# Specific ship names from ships.js — searched by name on Wikimedia Commons
+SHIP_NAMES = {
+    'cruise':      ['Wonder of the Seas','Symphony of the Seas','MSC World Europa',
+                    'Queen Mary 2','Oasis of the Seas','Disney Wish','Norwegian Bliss',
+                    'Harmony of the Seas','Costa Toscana','SS United States'],
+    'container':   ['Ever Ace','MSC Gülsün','HMM Algeciras','CMA CGM Jacques Saadé',
+                    'Ever Given','OOCL Hong Kong','Madrid Maersk','MSC Oscar',
+                    'Emma Maersk','Cosco Shipping Universe'],
+    'bulk':        ['Berge Stahl','Mineral Beijing','Star Polaris','Pacific Basin Dolphin',
+                    'Golden Future','Aquafreedom','Vale Rio de Janeiro'],
+    'tanker':      ['Seawise Giant','TI Oceania','TI Africa','Front Altair',
+                    'Nordic Hawk','Overseas Houston','Jahre Viking'],
+    'coastguard':  ['USCGC Bertholf','USCGC Stratton','CGS Louis S. St-Laurent',
+                    'NoCGV Svalbard','USCGC Healy','JCG Akitsushima'],
+    'military':    ['USS Gerald R. Ford','USS Nimitz','HMS Queen Elizabeth',
+                    'USS Zumwalt','INS Vikrant','USS Arleigh Burke',
+                    'HMAS Canberra','HMS Daring','USS Iowa','INS Kolkata'],
+    'car-carrier': ['Tonsberg car carrier','Höegh Target','Grande Europa',
+                    'Cougar Ace','Neptune Ace','Siem Confucius'],
+    'megayacht':   ['Azzam yacht','Eclipse superyacht','Sailing Yacht A',
+                    'Octopus yacht Paul Allen','Lady Moura yacht',
+                    'Serene superyacht','Motor Yacht A'],
+}
+
 # Wikimedia Commons categories — properly tagged, curated ship photos, no API key needed
 WIKI_CATEGORIES = {
     'cruise':       ['Cruise ships', 'Ocean liners'],
@@ -161,6 +185,79 @@ def download_images():
                 pass
 
         print(f"  {ship_type:12s} — {downloaded} images saved")
+
+    # Second pass: search for each specific ship by name
+    print("\nSearching for specific ships by name...")
+
+    def search_ship_images(ship_name, limit=8):
+        """Search Wikimedia Commons for images of a specific ship by name."""
+        import time
+        try:
+            time.sleep(0.3)
+            r = requests.get(WIKI_API, headers=HEADERS, timeout=15, params={
+                'action':    'query',
+                'list':      'search',
+                'srsearch':  f'{ship_name} ship',
+                'srnamespace': 6,
+                'srlimit':   limit,
+                'format':    'json',
+            })
+            if not r.text.strip():
+                return []
+            results = r.json().get('query', {}).get('search', [])
+            titles  = [res['title'] for res in results
+                       if res['title'].lower().endswith(('.jpg', '.jpeg', '.png'))]
+            if not titles:
+                return []
+
+            time.sleep(0.2)
+            r2 = requests.get(WIKI_API, headers=HEADERS, timeout=15, params={
+                'action':     'query',
+                'titles':     '|'.join(titles),
+                'prop':       'imageinfo',
+                'iiprop':     'url',
+                'iiurlwidth': 640,
+                'format':     'json',
+            })
+            if not r2.text.strip():
+                return []
+            urls = []
+            for page in r2.json().get('query', {}).get('pages', {}).values():
+                info = page.get('imageinfo', [])
+                if info:
+                    url = info[0].get('thumburl') or info[0].get('url')
+                    if url:
+                        urls.append(url)
+            return urls
+        except Exception:
+            return []
+
+    for ship_type, names in SHIP_NAMES.items():
+        out_dir = DATA_DIR / ship_type
+        out_dir.mkdir(parents=True, exist_ok=True)
+        existing = len(list(out_dir.glob('*.jpg'))) + len(list(out_dir.glob('*.png')))
+        added = 0
+
+        for ship_name in names:
+            urls = search_ship_images(ship_name)
+            for url in urls:
+                dest = out_dir / f'named_{ship_name[:20].replace(" ","_")}_{added:03d}.jpg'
+                if dest.exists():
+                    added += 1
+                    continue
+                try:
+                    req = urllib.request.Request(url, headers=HEADERS)
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        data = resp.read()
+                    if len(data) < 15_000:
+                        continue
+                    with open(dest, 'wb') as f:
+                        f.write(data)
+                    added += 1
+                except Exception:
+                    pass
+
+        print(f"  {ship_type:12s} — +{added} named ship images")
 
     print("\nDownload complete.\n")
 
